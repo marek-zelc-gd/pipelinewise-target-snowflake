@@ -5,6 +5,8 @@ import re
 import time
 
 from typing import List, Dict, Union, Tuple, Set
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import serialization
 from singer import get_logger
 from target_snowflake import flattening
 from target_snowflake import stream_utils
@@ -22,7 +24,6 @@ def validate_config(config):
         'account',
         'dbname',
         'user',
-        'password',
         'warehouse',
         's3_bucket',
         'stage',
@@ -33,7 +34,6 @@ def validate_config(config):
         'account',
         'dbname',
         'user',
-        'password',
         'warehouse',
         'file_format'
     ]
@@ -55,6 +55,14 @@ def validate_config(config):
     for k in required_config_keys:
         if not config.get(k, None):
             errors.append(f"Required key is missing from config: [{k}]")
+
+    # Exactly one authentication method must be configured: password or key-pair
+    has_password = bool(config.get('password', None))
+    has_private_key = bool(config.get('private_key', None) or config.get('private_key_path', None))
+    if not has_password and not has_private_key:
+        errors.append("Either 'password' or 'private_key'/'private_key_path' must be set in config for authentication.")
+    if has_password and has_private_key:
+        errors.append("Only one of 'password' or 'private_key'/'private_key_path' may be set in config, not both.")
 
     # Check target schema config
     config_default_target_schema = config.get('default_target_schema', None)
@@ -285,20 +293,51 @@ class DbSync:
         else:
             self.upload_client = SnowflakeUploadClient(connection_config, self)
 
+    def get_private_key(self):
+        """Load a PKCS8 DER-encoded private key for key-pair authentication.
+
+        Accepts either the raw PEM content in 'private_key' (optionally with
+        literal '\\n' escapes, as environment variables can't hold real newlines)
+        or a path to a PEM file in 'private_key_path'. Snowflake's connector
+        requires the key as DER bytes, so it's converted here.
+        """
+        raw_key = self.connection_config.get('private_key', None)
+        if raw_key:
+            pem_bytes = raw_key.replace('\\n', '\n').encode('utf-8')
+        else:
+            with open(self.connection_config['private_key_path'], 'rb') as key_file:
+                pem_bytes = key_file.read()
+
+        passphrase = self.connection_config.get('private_key_passphrase', None)
+        private_key = serialization.load_pem_private_key(
+            pem_bytes,
+            password=passphrase.encode('utf-8') if passphrase else None,
+            backend=default_backend())
+
+        return private_key.private_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption())
+
     def open_connection(self):
         """Open snowflake connection"""
         stream = None
         if self.stream_schema_message:
             stream = self.stream_schema_message['stream']
 
+        if self.connection_config.get('password', None):
+            auth_params = {'password': self.connection_config['password']}
+        else:
+            auth_params = {'private_key': self.get_private_key()}
+
         return snowflake.connector.connect(
             user=self.connection_config['user'],
-            password=self.connection_config['password'],
             account=self.connection_config['account'],
             database=self.connection_config['dbname'],
             warehouse=self.connection_config['warehouse'],
             role=self.connection_config.get('role', None),
             autocommit=True,
+            **auth_params,
             session_parameters={
                 # Quoted identifiers should be case sensitive
                 'QUOTED_IDENTIFIERS_IGNORE_CASE': 'FALSE',

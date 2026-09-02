@@ -143,7 +143,10 @@ Full list of options in `config.json`:
 | account                             | String  | Yes        | Snowflake account name (i.e. rtXXXXX.eu-central-1)            |
 | dbname                              | String  | Yes        | Snowflake Database name                                       |
 | user                                | String  | Yes        | Snowflake User                                                |
-| password                            | String  | Yes        | Snowflake Password                                            |
+| password                            | String  | No         | Snowflake Password. Required unless `private_key` or `private_key_path` is set. |
+| private_key                         | String  | No         | PEM-encoded private key for key-pair authentication, as a single string (use `\n` for line breaks). Alternative to `password`/`private_key_path`. |
+| private_key_path                    | String  | No         | Path to a PEM-encoded private key file for key-pair authentication. Alternative to `password`/`private_key`. |
+| private_key_passphrase              | String  | No         | Passphrase to decrypt an encrypted private key given via `private_key` or `private_key_path`. |
 | warehouse                           | String  | Yes        | Snowflake virtual warehouse name                              |
 | role                                | String  | No         | Snowflake role to use. If not defined then the user's default role will be used |
 | aws_access_key_id                   | String  | No         | S3 Access Key Id. If not provided, `AWS_ACCESS_KEY_ID` environment variable or IAM role will be used |
